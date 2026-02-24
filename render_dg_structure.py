@@ -1,71 +1,74 @@
 """
-Render SecB crystal structure (1QYN) colored by residue-level ΔG from PyHDX.
-Shows the full homotetramer (chains A/B/C/D).
-Color ramp matches the scatter plot: blue (low ΔG) → white → red (high ΔG).
-Residues with no ΔG data are shown in grey.
-Output: outputs/pyhdx_dG_structure.png
+Render two PyMOL structure figures in a single session:
+  1. outputs/pyhdx_dG_structure.png  — inferno colormap (ΔG, tetramer)
+  2. outputs/pyhdx_ddG_structure.png — RdBu_r diverging (ΔΔG dimer−tetramer)
+Residues with no data are grey. Full homotetramer shown in both.
 """
 
 import pandas as pd
-import matplotlib.cm as cm
+import matplotlib.cm as mcm
 import matplotlib.colors as mcolors
 from pathlib import Path
 
-# ── Load ΔG data ──────────────────────────────────────────────────────────────
-dg_kj = pd.read_csv("outputs/pyhdx_dG.csv", index_col="r_number")["dG_kJ_mol"]
-dg_min = dg_kj.dropna().min()
-dg_max = dg_kj.dropna().max()
-print(f"ΔG range: {dg_min:.1f} – {dg_max:.1f} kJ/mol  ({len(dg_kj.dropna())} residues)")
+# ── Load data ─────────────────────────────────────────────────────────────────
+dg_kj = pd.read_csv("outputs/pyhdx_dG.csv", index_col="r_number")["dG_kJ_mol"].dropna()
+ddg    = pd.read_csv("outputs/pyhdx_ddG.csv", index_col="r_number")["ddG_kJ_mol"].dropna()
 
-# ── Launch PyMOL in headless mode ─────────────────────────────────────────────
+dg_min, dg_max = dg_kj.min(), dg_kj.max()
+abs_max = max(abs(ddg.min()), abs(ddg.max()))
+
+print(f"ΔG  range: {dg_min:.1f} – {dg_max:.1f} kJ/mol")
+print(f"ΔΔG range: {ddg.min():.1f} – {ddg.max():.1f} kJ/mol")
+
+# ── Colormaps ─────────────────────────────────────────────────────────────────
+cmap_dg  = mcm.get_cmap("inferno")
+norm_dg  = mcolors.Normalize(vmin=dg_min, vmax=dg_max)
+
+cmap_ddg = mcolors.LinearSegmentedColormap.from_list(
+    "RdBu5", ["#2166ac", "#d1e5f0", "#f7f7f7", "#fddbc7", "#b2182b"]
+)
+norm_ddg = mcolors.TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
+
+# ── Single PyMOL session ──────────────────────────────────────────────────────
 import pymol
 from pymol import cmd
 
-pymol.finish_launching(["pymol", "-cq"])   # -c = no GUI, -q = quiet
+pymol.finish_launching(["pymol", "-cq"])
 
-# Load the full tetramer (chains A/B/C/D)
 PDB = "test_data/HDX_D9096080/data/SecB_structure.pdb"
-cmd.load(PDB, "secb")
 
-# Cartoon representation, white background
-cmd.hide("everything", "secb")
-cmd.show("cartoon", "secb")
-cmd.bg_color("white")
+def load_and_color(obj_name, data, cmap, norm, out_path):
+    """Load PDB, colour by data series, ray-trace and save."""
+    cmd.load(PDB, obj_name)
+    cmd.hide("everything", obj_name)
+    cmd.show("cartoon", obj_name)
+    cmd.bg_color("white")
+    cmd.set("cartoon_fancy_helices", 1)
+    cmd.set("ray_shadows", 0)
+    cmd.set("ambient", 0.45)
+    cmd.set("ray_opaque_background", 1)
 
-# Set all b-factors to -1 (sentinel = no data → will be grey)
-cmd.alter("secb", "b = -1.0")
+    # Default grey for uncovered residues
+    cmd.color("grey70", obj_name)
 
-# Assign ΔG values to all four chains identically (homotetramer)
-for resi, dg in dg_kj.dropna().items():
-    cmd.alter(f"secb and resi {int(resi)}", f"b = {dg:.4f}")
+    # Per-residue colours from matplotlib colormap
+    for resi, val in data.items():
+        r, g, b, _ = cmap(norm(val))
+        cname = f"{obj_name}_r{int(resi)}"
+        cmd.set_color(cname, [r, g, b])
+        cmd.color(cname, f"{obj_name} and resi {int(resi)}")
 
-cmd.rebuild()
+    cmd.orient(obj_name)
+    cmd.zoom(obj_name, 3)
+    cmd.ray(1200, 800)
+    cmd.png(out_path, dpi=150)
+    print(f"Saved: {out_path}  ({Path(out_path).stat().st_size / 1024:.1f} kB)")
+    cmd.delete(obj_name)
 
-# "hot fire" (inferno) color ramp — matches the scatter plot exactly.
-# PyMOL has no native inferno, so we generate colors from matplotlib and assign per residue.
-cmap = cm.get_cmap("inferno")
-norm = mcolors.Normalize(vmin=dg_min, vmax=dg_max)
+# Figure 1 — ΔG (inferno)
+load_and_color("secb_dg", dg_kj, cmap_dg, norm_dg, "outputs/pyhdx_dG_structure.png")
 
-cmd.color("grey70", "secb")   # default for uncovered residues
-
-for resi, dg in dg_kj.dropna().items():
-    r, g, b_ch, _ = cmap(norm(dg))
-    color_name = f"dg_{int(resi)}"
-    cmd.set_color(color_name, [r, g, b_ch])
-    cmd.color(color_name, f"secb and resi {int(resi)}")
-
-# View: orient to show the flat face of the tetramer β-sheet
-cmd.orient("secb")
-cmd.zoom("secb", 3)
-cmd.set("cartoon_fancy_helices", 1)
-cmd.set("ray_shadows", 0)
-cmd.set("ambient", 0.45)
-cmd.set("ray_opaque_background", 1)
-
-# Render and save
-OUT = "outputs/pyhdx_dG_structure.png"
-cmd.ray(2400, 1600)
-cmd.png(OUT, dpi=150)
-print(f"Saved: {OUT}  ({Path(OUT).stat().st_size / 1024:.1f} kB)")
+# Figure 2 — ΔΔG (diverging)
+load_and_color("secb_ddg", ddg, cmap_ddg, norm_ddg, "outputs/pyhdx_ddG_structure.png")
 
 cmd.quit()
