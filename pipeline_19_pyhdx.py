@@ -38,17 +38,10 @@ print(f"\n[Step 1] PyHDX version: {pyhdx.__version__}")
 # ===========================================================================
 print("\n[Step 2] Loading SecB dataset (HDX_D9096080) …")
 
-DB_DIR = Path("/tmp/hdxms_data")
-DB_DIR.mkdir(exist_ok=True)
+DB_DIR = Path("test_data")
 
 db = RemoteDataBase(DB_DIR)
-
-# Fetch from remote only if not already cached
-if "HDX_D9096080" not in db.local_datasets:
-    ok, msg = db.fetch_dataset("HDX_D9096080")
-    print(f"  Fetch status: {ok}  {msg}")
-else:
-    print("  Using cached dataset.")
+print(f"  Using local dataset from {DB_DIR.resolve()}")
 
 dataset = db.load_dataset("HDX_D9096080")
 print(f"  Dataset: {dataset.description[:60]}")
@@ -69,7 +62,7 @@ print(f"    [1] {state.peptides[1].deuteration_type.name}, "
 # ===========================================================================
 print("\n[Step 3] Pre-processing peptide data …")
 
-base_dir = db.database_dir / "HDX_D9096080"
+base_dir = Path(".")  # data_file paths in dataset.json are already relative to cwd
 
 # Load narwhals DataFrames and convert to pandas
 # pyhdx uses 'stop' as an exclusive (one-past-end) residue number,

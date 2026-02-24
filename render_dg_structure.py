@@ -21,7 +21,7 @@ from pymol import cmd
 pymol.finish_launching(["pymol", "-cq"])   # -c = no GUI, -q = quiet
 
 # Load the bundled PDB (1QYN, tetramer A/B/C/D)
-PDB = "/tmp/hdxms_data/HDX_D9096080/data/SecB_structure.pdb"
+PDB = "test_data/HDX_D9096080/data/SecB_structure.pdb"
 cmd.load(PDB, "secb")
 
 # Cartoon representation, white background
