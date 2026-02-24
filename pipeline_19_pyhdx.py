@@ -174,9 +174,21 @@ print("\n[Step 9] Saving ΔG plot …")
 
 dg_values = dg_kj["dG_kJ_mol"].dropna()
 
+# Use the same blue→white→red colormap as the PyMOL structure figure
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+
+# "hot fire" colormap: black/purple (low ΔG) → orange → yellow (high ΔG)
+cmap = cm.get_cmap("inferno")
+norm = mcolors.Normalize(vmin=dg_values.min(), vmax=dg_values.max())
+colors = cmap(norm(dg_values.values))
+
 fig, ax = plt.subplots(figsize=(12, 4))
-ax.scatter(dg_values.index, dg_values.values, s=12, color="steelblue", alpha=0.85)
-ax.plot(dg_values.index, dg_values.values)
+ax.plot(dg_values.index, dg_values.values, color="lightgray", linewidth=0.8, zorder=1)
+ax.scatter(dg_values.index, dg_values.values, s=25, c=colors, zorder=2)
+sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+sm.set_array([])
+plt.colorbar(sm, ax=ax, label="ΔG (kJ/mol)", fraction=0.03, pad=0.02)
 ax.set_xlabel("Residue number")
 ax.set_ylabel("ΔG (kJ/mol)")
 ax.set_title("PyHDX — Residue-level ΔG (SecB WT apo)")
@@ -190,15 +202,98 @@ print(f"  Saved: {png_path}  ({png_path.stat().st_size / 1024:.1f} kB)")
 
 
 # ===========================================================================
+# Step 10 — Fit dimer state ΔG
+# (Dimer has no FD control; reuse tetramer FD control — standard practice)
+# ===========================================================================
+print("\n[Step 10] Fitting dimer state ΔG …")
+
+state_dimer = dataset.states[1]   # SecB his dimer apo (Y109A/T115A/S119A)
+dim_pl = load_peptides(state_dimer.peptides[0], base_dir=base_dir).to_native()
+dim_pd = dim_pl.to_pandas()
+dim_pd["stop"] = dim_pd["end"] + 1
+
+# Reuse tetramer FD control for back-exchange normalisation
+dim_corr  = apply_control(dim_pd, fd_pd)
+dim_final = correct_d_uptake(dim_corr)
+
+DIMER_SEQ = state_dimer.protein_state.sequence
+hdxm_dim = HDXMeasurement(dim_final, temperature=303.15, pH=8.0, sequence=DIMER_SEQ)
+print(hdxm_dim)
+
+rate_dim        = fit_rates_half_time_interpolate(hdxm_dim)
+gibbs_guess_dim = hdxm_dim.guess_deltaG(rate_dim.output["rate"])
+gibbs_dim       = fit_gibbs_global(hdxm_dim, gibbs_guess_dim,
+                                   epochs=100_000, r1=0.1,
+                                   stop_loss=1e-5, patience=50, lr=1e5)
+
+dg_dim_kj = gibbs_dim.dG.copy() / 1000.0
+dg_dim_kj.columns = ["dG_kJ_mol"]
+dg_dim_kj.index.name = "r_number"
+
+csv_dim_path = OUTPUT_DIR / "pyhdx_dG_dimer.csv"
+dg_dim_kj.to_csv(csv_dim_path)
+print(f"  Saved: {csv_dim_path}  ({len(dg_dim_kj)} rows)")
+
+
+# ===========================================================================
+# Step 11 — Compute ΔΔG = ΔG_dimer − ΔG_tetramer and save CSV
+# ===========================================================================
+print("\n[Step 11] Computing ΔΔG (dimer − tetramer) …")
+
+# Align on common residues
+common = dg_kj.index.intersection(dg_dim_kj.index)
+ddg = (dg_dim_kj.loc[common, "dG_kJ_mol"] - dg_kj.loc[common, "dG_kJ_mol"]).dropna()
+ddg.name = "ddG_kJ_mol"
+ddg.index.name = "r_number"
+
+csv_ddg_path = OUTPUT_DIR / "pyhdx_ddG.csv"
+ddg.to_csv(csv_ddg_path, header=True)
+print(f"  ΔΔG range: {ddg.min():.1f} – {ddg.max():.1f} kJ/mol  ({len(ddg)} residues)")
+print(f"  Saved: {csv_ddg_path}")
+
+
+# ===========================================================================
+# Step 12 — ΔΔG scatter plot (diverging colormap, 0-centred)
+# ===========================================================================
+print("\n[Step 12] Saving ΔΔG plot …")
+
+# Symmetric colour scale centred at zero
+abs_max = max(abs(ddg.min()), abs(ddg.max()))
+norm_ddg = mcolors.TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
+cmap_ddg = cm.get_cmap("RdBu_r")   # red = dimer more protected, blue = tetramer more protected
+colors_ddg = cmap_ddg(norm_ddg(ddg.values))
+
+fig, ax = plt.subplots(figsize=(12, 4))
+ax.axhline(0, color="gray", linewidth=0.8, linestyle="--", zorder=1)
+ax.plot(ddg.index, ddg.values, color="lightgray", linewidth=0.8, zorder=2)
+ax.scatter(ddg.index, ddg.values, s=25, c=colors_ddg, zorder=3)
+sm2 = cm.ScalarMappable(cmap=cmap_ddg, norm=norm_ddg)
+sm2.set_array([])
+plt.colorbar(sm2, ax=ax, label="ΔΔG (kJ/mol)", fraction=0.03, pad=0.02)
+ax.set_xlabel("Residue number")
+ax.set_ylabel("ΔΔG (kJ/mol)")
+ax.set_title("PyHDX — ΔΔG dimer − tetramer (SecB)  |  red = dimer more protected")
+plt.tight_layout()
+
+png_ddg_path = OUTPUT_DIR / "pyhdx_ddG_plot.png"
+fig.savefig(png_ddg_path, dpi=150)
+plt.close()
+print(f"  Saved: {png_ddg_path}  ({png_ddg_path.stat().st_size / 1024:.1f} kB)")
+
+
+# ===========================================================================
 # Verification summary
 # ===========================================================================
 print("\n=== Verification ===")
-print(f"  pyhdx installed:         {pyhdx.__version__}")
-print(f"  HDXMeasurement peptides: {hdxm.Np}")
-print(f"  HDXMeasurement residues: {hdxm.Nr}")
-print(f"  CSV rows:                {len(dg_kj)}")
-print(f"  CSV non-NaN ΔG values:   {dg_values.shape[0]}")
-print(f"  CSV path exists:         {csv_path.exists()}")
-print(f"  PNG path exists:         {png_path.exists()}")
-print(f"  PNG size (bytes):        {png_path.stat().st_size}")
+print(f"  pyhdx installed:            {pyhdx.__version__}")
+print(f"  Tetramer peptides/residues: {hdxm.Np} / {hdxm.Nr}")
+print(f"  Dimer    peptides/residues: {hdxm_dim.Np} / {hdxm_dim.Nr}")
+print(f"  Tetramer CSV rows:          {len(dg_kj)}")
+print(f"  Dimer    CSV rows:          {len(dg_dim_kj)}")
+print(f"  ΔΔG CSV rows:               {len(ddg)}")
+print(f"  outputs/pyhdx_dG.csv:           {csv_path.exists()}")
+print(f"  outputs/pyhdx_dG_dimer.csv:     {csv_dim_path.exists()}")
+print(f"  outputs/pyhdx_ddG.csv:          {csv_ddg_path.exists()}")
+print(f"  outputs/pyhdx_dG_plot.png:      {png_path.exists()}")
+print(f"  outputs/pyhdx_ddG_plot.png:     {png_ddg_path.exists()}")
 print("\nDone.")
