@@ -183,6 +183,7 @@ dg_values = dg_kj["dG_kJ_mol"].dropna()
 
 fig, ax = plt.subplots(figsize=(12, 4))
 ax.scatter(dg_values.index, dg_values.values, s=12, color="steelblue", alpha=0.85)
+ax.plot(dg_values.index, dg_values.values)
 ax.set_xlabel("Residue number")
 ax.set_ylabel("ΔG (kJ/mol)")
 ax.set_title("PyHDX — Residue-level ΔG (SecB WT apo)")
